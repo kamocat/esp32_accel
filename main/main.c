@@ -116,13 +116,13 @@ static esp_err_t data_get_handler(httpd_req_t *req)
     char s[1350];
     size_t len;
     int i = 0;
+    httpd_resp_set_type(req, HTTPD_TYPE_JSON);
     do{
       ++i;
-      len = accel_writer(s, 1200);
-      httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-      httpd_resp_send(req, s, len);
+      len = accel_writer(s, sizeof(s));
+      httpd_resp_send_chunk(req, s, len);
     }while(len);
-    ESP_LOGI(TAG, "Sent %d packets", i);
+    ESP_LOGI(TAG, "Sent %d chunks", i);
     return ESP_OK;
 }
 

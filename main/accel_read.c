@@ -106,7 +106,7 @@ static esp_err_t adxl_get_accel(struct xyz * data){
     return err;
 }
 
-#define ACCEL_LOG_SIZE 10
+#define ACCEL_LOG_SIZE 1000
 static struct xyz accel_log[ACCEL_LOG_SIZE];
 static size_t accel_latest;
 
