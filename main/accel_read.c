@@ -106,7 +106,7 @@ static esp_err_t adxl_get_accel(struct xyz * data){
     return err;
 }
 
-#define ACCEL_LOG_SIZE 30
+#define ACCEL_LOG_SIZE 10
 static struct xyz accel_log[ACCEL_LOG_SIZE];
 static size_t accel_latest;
 
@@ -122,10 +122,10 @@ size_t accel_writer(char * dest, size_t size){
     static int iter = 0;
     switch(iter){ // Used to maintain state. Fall-through intended.
         case 0: // Setup
-            i1 = accel_latest + 5;
+            i1 = accel_latest + 2;
             i2 = ACCEL_LOG_SIZE;
             i3 = 0;
-            i4 = accel_latest;
+            i4 = accel_latest+1;
             i = i1;
             written = snprintf(dest, size, "[["); // Start of JSON array
             __attribute__ ((fallthrough));
@@ -137,6 +137,7 @@ size_t accel_writer(char * dest, size_t size){
         case 2:
             iter = 2;
             LAMBDA_COPY(accel_log[i].t, i4)
+            --written;
             written += snprintf(dest+written, size-written, "],["); // Array seperator
             i = i1;
             __attribute__ ((fallthrough));
@@ -148,6 +149,7 @@ size_t accel_writer(char * dest, size_t size){
         case 4:
             iter = 4;
             LAMBDA_COPY(accel_log[i].x, i4)
+            --written;
             written += snprintf(dest+written, size-written, "],["); // Array seperator
             i = i1;
             __attribute__ ((fallthrough));
@@ -159,6 +161,7 @@ size_t accel_writer(char * dest, size_t size){
         case 6:
             iter = 6;
             LAMBDA_COPY(accel_log[i].y, i4)
+            --written;
             written += snprintf(dest+written, size-written, "],["); // Array seperator
             i = i1;
             __attribute__ ((fallthrough));
@@ -170,6 +173,7 @@ size_t accel_writer(char * dest, size_t size){
         case 8:
             iter = 8;
             LAMBDA_COPY(accel_log[i].z, i4)
+            --written;
             written += snprintf(dest+written, size-written, "]]"); // Array end
             iter = 9;
             return written;
