@@ -179,7 +179,7 @@ size_t accel_writer(char * dest, size_t size){
     }
 }
 
-void accel_reader_task(void)
+void accel_reader_task(void *pvParameters)
 {
     uint8_t data[2];
     struct xyz accel;
@@ -199,10 +199,10 @@ void accel_reader_task(void)
 
     while(1){
         ESP_WARN(adxl_get_accel(&accel));
-        if( ++accel_latest > ACCEL_LOG_SIZE)
+        if( ++accel_latest >= ACCEL_LOG_SIZE)
             accel_latest = 0;
         accel_log[accel_latest] = accel;
-        ESP_LOGI(TAG, "%.3f %.3f %.3f %.3f", accel.x, accel.y, accel.z, accel.t);
+        ESP_LOGI(TAG, "%.3f %.3f %.3f %.3f %d", accel.x, accel.y, accel.z, accel.t, accel_latest);
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 

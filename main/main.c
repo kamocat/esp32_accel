@@ -10,6 +10,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "freertos/task.h"
 
 #include "nvs_flash.h"
 #include "esp_wifi.h"
@@ -191,6 +192,7 @@ void app_main(void)
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
 
+    xTaskCreate(accel_reader_task, "Accel Reader", 2048, NULL, 2, NULL);
 
     // Initialize networking stack
     ESP_ERROR_CHECK(esp_netif_init());
