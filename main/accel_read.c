@@ -14,8 +14,7 @@
 
    Unless required by applicable law or agreed to in writing, this
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
+   CONDITIONS OF ANY KIND, either express or implied.  */
 #include <stdio.h>
 #include "esp_log.h"
 #include "driver/i2c.h"
@@ -111,29 +110,76 @@ static esp_err_t adxl_get_accel(struct xyz * data){
 static struct xyz accel_log[ACCEL_LOG_SIZE];
 static size_t accel_latest;
 
-bool accel_writer(char * dest, size_t size){
+#define LAMBDA_COPY(val, stop) for(;i<stop;++i){written+=snprintf(dest+written,size-written,fmt,val);if((size-written)<min_size){return written;}}
+
+size_t accel_writer(char * dest, size_t size){
     const size_t min_size = 20; //Stop writing if not enough bytes are left
     const char * fmt = "%.3f,"; //Format floats to 3 digits past the decimal
+    size_t written = 0;
 
-    // All variables declared static to maintain state
+    // All persistent variables are declared static
     static size_t i1, i2, i3, i4, i;
     static int iter = 0;
     switch(iter){ // Used to maintain state. Fall-through intended.
         case 0: // Setup
-            more = true;
             i1 = accel_latest + 100;
             i2 = ACCEL_LOG_SIZE;
             i3 = 0;
             i4 = accel_latest;
+            i = i1;
+            written = snprintf(dest, size, "[["); // Start of JSON array
+            __attribute__ ((fallthrough));
         case 1:
             iter = 1;
+            LAMBDA_COPY(accel_log[i].t, i2)
+            i = i3;
+            __attribute__ ((fallthrough));
         case 2:
             iter = 2;
-            for(;++i;i<i2)
+            LAMBDA_COPY(accel_log[i].t, i4)
+            written += snprintf(dest+written, size-written, "],["); // Array seperator
+            i = i1;
+            __attribute__ ((fallthrough));
+        case 3:
+            iter = 3;
+            LAMBDA_COPY(accel_log[i].x, i2)
+            i = i3;
+            __attribute__ ((fallthrough));
+        case 4:
+            iter = 4;
+            LAMBDA_COPY(accel_log[i].x, i4)
+            written += snprintf(dest+written, size-written, "],["); // Array seperator
+            i = i1;
+            __attribute__ ((fallthrough));
+        case 5:
+            iter = 5;
+            LAMBDA_COPY(accel_log[i].y, i2)
+            i = i3;
+            __attribute__ ((fallthrough));
+        case 6:
+            iter = 6;
+            LAMBDA_COPY(accel_log[i].y, i4)
+            written += snprintf(dest+written, size-written, "],["); // Array seperator
+            i = i1;
+            __attribute__ ((fallthrough));
+        case 7:
+            iter = 7;
+            LAMBDA_COPY(accel_log[i].z, i2)
+            i = i3;
+            __attribute__ ((fallthrough));
+        case 8:
+            iter = 8;
+            LAMBDA_COPY(accel_log[i].z, i4)
+            written += snprintf(dest+written, size-written, "]]"); // Array end
+            iter = 9;
+            return written;
+        default:
+            iter = 0;
+            return 0; // Finished writing
     }
 }
 
-void app_main(void)
+void accel_reader_task(void)
 {
     uint8_t data[2];
     struct xyz accel;

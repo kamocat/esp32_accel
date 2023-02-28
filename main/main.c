@@ -18,6 +18,7 @@
 
 #include "esp_http_server.h"
 #include "dns_server.h"
+#include "accel_read.h"
 
 #define EXAMPLE_ESP_WIFI_SSID CONFIG_ESP_WIFI_SSID
 #define EXAMPLE_ESP_WIFI_PASS CONFIG_ESP_WIFI_PASSWORD
