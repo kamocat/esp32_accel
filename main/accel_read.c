@@ -106,7 +106,7 @@ static esp_err_t adxl_get_accel(struct xyz * data){
     return err;
 }
 
-#define ACCEL_LOG_SIZE 1024
+#define ACCEL_LOG_SIZE 30
 static struct xyz accel_log[ACCEL_LOG_SIZE];
 static size_t accel_latest;
 
@@ -122,7 +122,7 @@ size_t accel_writer(char * dest, size_t size){
     static int iter = 0;
     switch(iter){ // Used to maintain state. Fall-through intended.
         case 0: // Setup
-            i1 = accel_latest + 100;
+            i1 = accel_latest + 5;
             i2 = ACCEL_LOG_SIZE;
             i3 = 0;
             i4 = accel_latest;

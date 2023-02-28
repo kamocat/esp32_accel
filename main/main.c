@@ -113,7 +113,7 @@ static esp_err_t css_get_handler(httpd_req_t *req)
 static esp_err_t data_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Serve data");
-    char s[1200];
+    char s[1350];
     size_t len;
     int i = 0;
     do{
@@ -194,7 +194,7 @@ void app_main(void)
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
 
     // Start the acceleration measurement
-    xTaskCreate(accel_reader_task, "Accel Reader", 2048, NULL, 2, NULL);
+    xTaskCreate(accel_reader_task, "Accel Reader", 4096, NULL, 2, NULL);
 
     // Initialize networking stack
     ESP_ERROR_CHECK(esp_netif_init());
