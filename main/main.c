@@ -113,15 +113,16 @@ static esp_err_t css_get_handler(httpd_req_t *req)
 static esp_err_t data_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Serve data");
-    httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    static float x = 0;
-    if( ++x > 10)
-      x = -x;
-    char s[50];
-    int len = snprintf(s, 50, "[[%.3f], [%.3f], [%.3f], [%.3f]]", x, x, x, x);
-    httpd_resp_send(req, s, len);
-    int fsz = xPortGetFreeHeapSize();
-    ESP_LOGI(TAG, "Free heap: %d bytes",fsz);
+    char s[1200];
+    size_t len;
+    int i = 0;
+    do{
+      ++i;
+      len = accel_writer(s, 1200);
+      httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+      httpd_resp_send(req, s, len);
+    }while(len);
+    ESP_LOGI(TAG, "Sent %d packets", i);
     return ESP_OK;
 }
 
@@ -192,6 +193,7 @@ void app_main(void)
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
 
+    // Start the acceleration measurement
     xTaskCreate(accel_reader_task, "Accel Reader", 2048, NULL, 2, NULL);
 
     // Initialize networking stack
