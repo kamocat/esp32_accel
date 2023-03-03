@@ -5,20 +5,16 @@ button{
 	width: 40%;
 	padding: 1em;
 }
-#dl{
-	float: right;
-  display: none;
-}
 </style>
 <link rel="stylesheet" href="/static/uPlot/dist/uPlot.min.css">
-<script src="/static/uPlot/dist/uPlot.iife.min.js"></script>
+<script src="/static/uPlot/dist/uPlot.iife.js"></script>
 <script>
 	let opts = {
 		title: "Acceleration",
 		id: "chart1",
 		class: "mychart",
-		width: 500,
-		height: 400,
+		width: window.innerWidth,
+		height: window.innerHeight*0.8,
 		series: [
 			{
 				scale: "seconds",
@@ -46,7 +42,7 @@ button{
 			},
 			"acceleration": {
 				auto: false,
-				range: [-16, 16]
+				range: [-1, 1]
 			},
 		},
 	}
@@ -103,12 +99,12 @@ button{
 		button = document.getElementById("ctrl");
 		if(recording){ //Recording is completed. Start the download. 
 			file = new Blob(pretty(transpose(og)), {type:"octet/stream"});
-			window.open(URL.createObjectURL(file));
+      document.getElementById("dl").href=URL.createObjectURL(file);
 			button.innerText = "Start Recording";
 			recording = false;
 		} else { // Begin the recording
 			og = false;
-			button.innerText = "Download";
+			button.innerText = "Recording...";
 			recording = true;
 		}
 	}
@@ -116,6 +112,6 @@ button{
 <body>
 <div id="chart1"></div>
 <button id="ctrl" onclick="toggle_recording()">Start Recording</button>
-<a href="/log.csv"><button id="dl">Download Entire Log</button></a>
+<a id="dl" href="" download="acceleration_log.csv"><button>Download</button></a>
 </body></html>
 

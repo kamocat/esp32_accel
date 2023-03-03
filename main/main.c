@@ -132,7 +132,7 @@ static const httpd_uri_t root = {
     .handler = root_get_handler
 };
 static const httpd_uri_t js = {
-    .uri = "/static/uPlot/dist/uPlot.iife.min.js",
+    .uri = "/static/uPlot/dist/uPlot.iife.js",
     .method = HTTP_GET,
     .handler = js_get_handler
 };
