@@ -98,55 +98,40 @@ struct xyz{
     int16_t x;
     int16_t y;
     int16_t z;
-    float t;
 };
-
-static esp_err_t get_accel(struct xyz * data){
-    int16_t buf[3];
-    esp_err_t err = register_read(0x3B, (uint8_t*)buf, 6);
-    //sESP_LOG_BUFFER_HEX(TAG, buf, 6);
-    data->x = __bswap_16(buf[0]);
-    data->y = __bswap_16(buf[1]);
-    data->z = __bswap_16(buf[2]);
-    data->t = esp_timer_get_time() * 0.000001;
-    return err;
-}
 
 #define ACCEL_LOG_SIZE 400
 static struct xyz accel_log[ACCEL_LOG_SIZE];
 static size_t accel_latest;
+static long t_latest;
 
 #define LAMBDA_COPY(val, stop, fmt) for(;i<stop;++i){written+=snprintf(dest+written,size-written,fmt,val);if((size-written)<min_size){return written;}}
 
-size_t accel_writer(char * dest, size_t size){
+size_t accel_writer(char * dest, size_t size, long t0){
     const size_t min_size = 20; //Stop writing if not enough bytes are left
-    const char * fmt = "%.3f,"; //Format floats to 3 digits past the decimal
     const char * dfmt = "%d,"; //Integer format
     size_t written = 0;
+    size_t len;
 
     // All persistent variables are declared static
     static size_t i1, i2, i3, i4, i;
     static int iter = 0;
     switch(iter){ // Used to maintain state. Fall-through intended.
         case 0: // Setup
-            i1 = accel_latest + 10;
+            len = t_latest - t0;
+            if(len > (ACCEL_LOG_SIZE - 10)){
+                len = ACCEL_LOG_SIZE - 10;
+                t0 = t_latest - len;
+            }
+            i3 = accel_latest - len;
+            if(i3 > ACCEL_LOG_SIZE){
+                i1 = i3 + ACCEL_LOG_SIZE;
+                i3 = 0;
+            }
             i2 = ACCEL_LOG_SIZE;
-            i3 = 0;
-            i4 = accel_latest+1;
+            i4 = accel_latest;
             i = i1;
-            written = snprintf(dest, size, "[["); // Start of JSON array
-            __attribute__ ((fallthrough));
-        case 1:
-            iter = 1;
-            LAMBDA_COPY(accel_log[i].t, i2, fmt)
-            i = i3;
-            __attribute__ ((fallthrough));
-        case 2:
-            iter = 2;
-            LAMBDA_COPY(accel_log[i].t, i4, fmt)
-            --written;
-            written += snprintf(dest+written, size-written, "],["); // Array seperator
-            i = i1;
+            written = snprintf(dest, size, "{\"t0\":%ld,\n\"x\":[", t0); // Start of JSON array
             __attribute__ ((fallthrough));
         case 3:
             iter = 3;
@@ -157,7 +142,7 @@ size_t accel_writer(char * dest, size_t size){
             iter = 4;
             LAMBDA_COPY(accel_log[i].x, i4, dfmt)
             --written;
-            written += snprintf(dest+written, size-written, "],["); // Array seperator
+            written += snprintf(dest+written, size-written, "],\n\"y\":["); // Array seperator
             i = i1;
             __attribute__ ((fallthrough));
         case 5:
@@ -169,7 +154,7 @@ size_t accel_writer(char * dest, size_t size){
             iter = 6;
             LAMBDA_COPY(accel_log[i].y, i4, dfmt)
             --written;
-            written += snprintf(dest+written, size-written, "],["); // Array seperator
+            written += snprintf(dest+written, size-written, "],\n\"z\":["); // Array seperator
             i = i1;
             __attribute__ ((fallthrough));
         case 7:
@@ -181,7 +166,7 @@ size_t accel_writer(char * dest, size_t size){
             iter = 8;
             LAMBDA_COPY(accel_log[i].z, i4, dfmt)
             --written;
-            written += snprintf(dest+written, size-written, "]]"); // Array end
+            written += snprintf(dest+written, size-written, "]\n}"); // Array end
             iter = 9;
             return written;
         default:
@@ -195,6 +180,7 @@ void accel_reader_task(void *pvParameters)
     uint8_t data[128];
     struct xyz accel;
     accel_latest = 0;
+    t_latest = 0;
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
 
@@ -217,7 +203,6 @@ void accel_reader_task(void *pvParameters)
 
     ESP_WARN(register_write_byte(0x23,0x08)); // Set only Accelerometer to fill FIFO
     ESP_WARN(register_write_byte(0x6A, 0x40));// Enable FIFO
-    accel.t = 0;
     while(1){
         //ESP_WARN(get_accel(&accel));
         int16_t fifo_size;
@@ -232,10 +217,11 @@ void accel_reader_task(void *pvParameters)
             accel.x = __bswap_16(*buf++);
             accel.y = __bswap_16(*buf++);
             accel.z = __bswap_16(*buf++);
-            accel.t+= 0.01;
+            //FIXME: Add a mutex or semaphore to prevent simultaneous access
+            ++t_latest;
+            accel_log[accel_latest] = accel;
             if( ++accel_latest >= ACCEL_LOG_SIZE)
                 accel_latest = 0;
-            accel_log[accel_latest] = accel;
         }
         //ESP_LOGI(TAG, "%d %d %d", accel.x, accel.y, accel.z);
         vTaskDelay(100 / portTICK_PERIOD_MS);

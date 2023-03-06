@@ -5,113 +5,42 @@ button{
 	width: 40%;
 	padding: 1em;
 }
+input{
+	width:40%;
+}
+label{
+	width:49%;
+}
+#autorange{
+	width:100%;
+}
+#sidebar{
+	float:right;
+	width: 20%;
+}
 </style>
 <link rel="stylesheet" href="/static/uPlot/dist/uPlot.min.css">
 <script src="/static/uPlot/dist/uPlot.iife.js"></script>
-<script>
-	let opts = {
-		title: "Acceleration",
-		id: "chart1",
-		class: "mychart",
-		width: window.innerWidth,
-		height: window.innerHeight*0.8,
-		series: [
-			{
-				scale: "seconds",
-				label: "seconds",
-			},{
-				scale: "acceleration",
-				label: "X",
-				stroke:"red",
-				width: 1,
-			},{
-				scale: "acceleration",
-				label: "Y",
-				stroke:"green",
-				width: 1,
-			},{
-				scale: "acceleration",
-				label: "Z",
-				stroke:"blue",
-				width: 1,
-			},
-		],
-		scales: {
-			"seconds": {
-				time: false,
-			},
-			"acceleration": {
-				auto: false,
-				range: [-20000, 20000]
-			},
-		},
-	}
-	let source = "/data";
-	function empty() {}
-	async function loop(){
-		let plot = await fetch(source)
-			.then((response) => response.json())
-			.then((data) => new uPlot(opts, data, document.getElementById("chart1")));
-		for(;;){
-			// Our loop is most likely limited by network delay
-			// So no need to use requestAnimationFrame()
-			await fetch(source)
-				.then((response) => response.json())
-				.then((data) => {plot.setData(data); append(data);});
-		}
-
-	}
-	loop();
-
-	let og = false;
-	function append(nw){
-		if(!recording){
-			return;
-		}else if(og == false){
-			og = nw.concat([]);
-		} else {
-			most_recent = og[0].slice(-1);
-			ni = nw[0].findIndex(function(time){
-				return time > most_recent;
-			});
-			for(let i=0; i < nw.length; i++){
-				og[i] = og[i].concat(nw[i].slice(ni,-1));
-			}
-		}
-	}
-
-
-		// Assume first array (time axis) is monotonic
-
-	function transpose(matrix) {
-  		return matrix[0].map((col, i) => matrix.map(row => row[i]));
-	}
-
-	function pretty(matrix) {
-		// Seperates the lines with newline instead of brackets
-		return matrix.map(row => row+'\r\n');
-	}
-
-		
-
-	let recording = false;
-	function toggle_recording() {
-		button = document.getElementById("ctrl");
-		if(recording){ //Recording is completed. Start the download. 
-			file = new Blob(pretty(transpose(og)), {type:"octet/stream"});
-      document.getElementById("dl").href=URL.createObjectURL(file);
-			button.innerText = "Start Recording";
-			recording = false;
-		} else { // Begin the recording
-			og = false;
-			button.innerText = "Recording...";
-			recording = true;
-		}
-	}
-</script></head>
+<script src="/static/liveplot.js"></script>
+</head>
 <body>
+<div id="sidebar">
+	<h2>Trigger</h2>
+	<label for="en">Enable</label>
+	<input type="checkbox" id="en" name="en"><br>
+	<label for="minv">Min</label>
+	<input type="number" id="minv" name="minv" step=1><br>
+	<label for="minv">Max</label>
+	<input type="number" id="maxv" name="maxv" step=1><br>
+	<button id="autorange" onclick="autorange()">Autorange</button><br>
+	<label for="timeout">Timeout</label>
+	<input title="Number of samples inside the window before capture is completed" type="number" id="timeout" name="timeout" value=500>
+	<h2>Stats</h2>
+	<p id="stats"></p>
+	
+<h2>Logs</h2>
+<ol id="dl"></ol>
+</div>
 <div id="chart1"></div>
-<button id="ctrl" onclick="toggle_recording()">Start Recording</button>
-<a id="dl" href="" download="acceleration_log.csv"><button>Download</button></a>
 </body></html>
 

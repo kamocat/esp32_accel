@@ -31,6 +31,8 @@ extern const char js_start[] asm("_binary_uPlot_iife_min_js_start");
 extern const char js_end[] asm("_binary_uPlot_iife_min_js_end");
 extern const char css_start[] asm("_binary_uPlot_min_css_start");
 extern const char css_end[] asm("_binary_uPlot_min_css_end");
+extern const char myjs_start[] asm("_binary_liveplot_js_start");
+extern const char myjs_end[] asm("_binary_liveplot_js_end");
 
 
 static const char *TAG = "example";
@@ -96,7 +98,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
 static esp_err_t js_get_handler(httpd_req_t *req)
 {
     const uint32_t len = js_end - js_start;
-    ESP_LOGI(TAG, "Serve javascript");
+    ESP_LOGI(TAG, "Serve uPlot.js");
     httpd_resp_set_type(req, "text/javascript");
     httpd_resp_send(req, js_start, len);
     return ESP_OK;
@@ -104,22 +106,31 @@ static esp_err_t js_get_handler(httpd_req_t *req)
 static esp_err_t css_get_handler(httpd_req_t *req)
 {
     const uint32_t len = css_end - css_start;
-    ESP_LOGI(TAG, "Serve css");
+    ESP_LOGI(TAG, "Serve uPlot.css");
     httpd_resp_set_type(req, "text/css");
     httpd_resp_send(req, css_start, len);
+    return ESP_OK;
+}
+static esp_err_t myjs_get_handler(httpd_req_t *req)
+{
+    const uint32_t len = myjs_end - myjs_start;
+    ESP_LOGI(TAG, "Serve liveplot.js");
+    httpd_resp_set_type(req, "text/javascript");
+    httpd_resp_send(req, myjs_start, len);
     return ESP_OK;
 }
 
 static esp_err_t data_get_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "Serve data");
+    long t0 = atol(req->uri + strlen("/data/"));
+    ESP_LOGI(TAG, "Serve data at index %ld", t0);
     char s[1350];
     size_t len;
     int i = 0;
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
     do{
       ++i;
-      len = accel_writer(s, sizeof(s));
+      len = accel_writer(s, sizeof(s), t0);
       httpd_resp_send_chunk(req, s, len);
     }while(len);
     ESP_LOGI(TAG, "Sent %d chunks", i);
@@ -143,9 +154,14 @@ static const httpd_uri_t css = {
 };
 
 static const httpd_uri_t data = {
-    .uri = "/data",
+    .uri = "/data/*",
     .method = HTTP_GET,
     .handler = data_get_handler 
+};
+static const httpd_uri_t myjs = {
+    .uri = "/static/liveplot.js",
+    .method = HTTP_GET,
+    .handler = myjs_get_handler
 };
 
 // HTTP Error (404) Handler - Redirects all requests to the root page
@@ -168,6 +184,7 @@ static httpd_handle_t start_webserver(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_open_sockets = 13;
     config.lru_purge_enable = true;
+    config.uri_match_fn = httpd_uri_match_wildcard;
 
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
@@ -178,6 +195,7 @@ static httpd_handle_t start_webserver(void)
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &js);
         httpd_register_uri_handler(server, &css);
+        httpd_register_uri_handler(server, &myjs);
         httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_404_error_handler);
     }
     return server;
