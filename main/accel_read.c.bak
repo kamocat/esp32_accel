@@ -19,7 +19,7 @@ Unless required by applicable law or agreed to in writing, this software is dist
 #include "esp_timer.h"
 #include "byteswap.h"
 #include "accel_read.h"
-#include "freertos/queue.h"
+#include "freertos/stream_buffer.h"
 
 static const char *TAG = "i2c";
 
@@ -107,7 +107,7 @@ void accel_reader_task(void *pvParameters)
     struct accel_t accel;
     uint8_t data[300];
     int16_t * buf = (int16_t *) data;
-    QueueHandle_t queue = (QueueHandle_t) pvParameters;
+    StreamBufferHandle_t stream = (StreamBufferHandle_t) pvParameters;
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
 
@@ -142,7 +142,7 @@ void accel_reader_task(void *pvParameters)
             accel.x = __bswap_16(*buf++);
             accel.y = __bswap_16(*buf++);
             accel.z = __bswap_16(*buf++);
-            xQueueSend(queue,&accel, 1);
+            xStreamBufferSend(stream,&accel,sizeof(struct accel_t), 1);
         }
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }

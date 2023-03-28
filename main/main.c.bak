@@ -11,7 +11,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "freertos/task.h"
-#include "freertos/queue.h"
+#include "freertos/stream_buffer.h"
 
 #include "nvs_flash.h"
 #include "esp_wifi.h"
@@ -122,14 +122,15 @@ static esp_err_t myjs_get_handler(httpd_req_t *req)
 }
 
 #define CMAX 10
-httpd_req_t clist[CMAX];
+httpd_req_t * connection[CMAX];
 size_t ccount;
 
 static esp_err_t data_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    const char * data = "{'axes':['x','y','z'],'data':[]}\n";
-    httpd_resp_send_chunk(req, data, 33);
+    if(ccount < CMAX){
+        connection[ccount++]=req;
+    }
     return ESP_OK;
 }
 
@@ -137,13 +138,13 @@ void streaming_connection_task(void *pvParameters)
 {
     const char * name = "stream";
     struct accel_t accel;
-    QueueHandle_t queue = (QueueHandle_t) pvParameters;
+    ccount = 0;
+    StreamBufferHandle_t stream = (StreamBufferHandle_t) pvParameters;
     char s[1300];
     const size_t len2 = snprintf(s, sizeof(s), "{'axes':['x','y','z'],'data':");
-    ccount = 0;
     while(1){
         size_t len = len2;
-        while(xQueueReceive(queue,&accel,100/portTICK_PERIOD_MS)){
+        while(xStreamBufferReceive(stream,&accel,sizeof(struct accel_t),100/portTICK_PERIOD_MS)){
             len += snprintf(s+len,sizeof(s)-len,"[%d,%d,%d],",accel.x,accel.y,accel.z);
             if((sizeof(s)-len) < 30){
                 break;
@@ -151,9 +152,8 @@ void streaming_connection_task(void *pvParameters)
         }
         ESP_LOGI(name, "JSON size: %d", len);
         s[len-1]='}';
-        s[len++]='\n';
         for(int i = 0; i < ccount; ++i){
-            httpd_resp_send_chunk(&clist[i], s, len);
+            httpd_resp_send_chunk(connection[i], s, len);
         }
     }
 }
@@ -232,11 +232,11 @@ void app_main(void)
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
 
-    QueueHandle_t accel_queue = xQueueCreate(500, sizeof(struct accel_t));
+    StreamBufferHandle_t sensor_stream = xStreamBufferCreate(512,sizeof(struct accel_t));
     // Start the acceleration measurement
-    xTaskCreate(accel_reader_task, "Accel Reader", 4096, accel_queue, 2, NULL);
+    xTaskCreate(accel_reader_task, "Accel Reader", 4096, sensor_stream, 2, NULL);
     // Start the streaming task
-    xTaskCreate(streaming_connection_task, "Data Stream", 8200, accel_queue, 2, NULL);
+    xTaskCreate(streaming_connection_task, "Data Stream", 4096, sensor_stream, 2, NULL);
 
     // Initialize networking stack
     ESP_ERROR_CHECK(esp_netif_init());
