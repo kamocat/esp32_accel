@@ -120,21 +120,42 @@ static esp_err_t myjs_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+#define CMAX 10
+httpd_req_t * connection[CMAX];
+size_t ccount;
+
 static esp_err_t data_get_handler(httpd_req_t *req)
 {
-    long t0 = atol(req->uri + strlen("/data/"));
-    ESP_LOGI(TAG, "Serve data at index %ld", t0);
-    char s[1350];
-    size_t len;
-    int i = 0;
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    do{
-      ++i;
-      len = accel_writer(s, sizeof(s), t0);
-      httpd_resp_send_chunk(req, s, len);
-    }while(len);
-    ESP_LOGI(TAG, "Sent %d chunks", i);
+    if(ccount < CMAX){
+        connection[ccount++]=req;
+    }
     return ESP_OK;
+}
+
+void streaming_connection_task(void *pvParameters)
+{
+    struct chunk_t chunk;
+    const char * name = "stream";
+    ccount = 0;
+    QueueHandle_t queue = (QueueHandle_t) pvParameters;
+    char s[1300];
+    const size_t len2 = snprintf(s, sizeof(s), "{'axes':['x','y','z'],'data':");
+    while(1){
+        if(xQueueReceive(queue,&chunk,portMAX_DELAY)){
+            size_t len = len2;
+            ESP_LOGI(name, "Data points: %d", chunk.len);
+            for(size_t i = 0; i < chunk.len; ++i){
+                struct accel_t d = chunk.data[i];
+                len += snprintf(s+len,sizeof(s)-len,"[%d,%d,%d],",d.x,d.y,d.z);
+            }
+            ESP_LOGI(name, "JSON size: %d", len);
+            s[len-1]='}';
+            for(int i = 0; i < ccount; ++i){
+                httpd_resp_send_chunk(connection[i], s, len);
+            }
+        }
+    }
 }
 
 static const httpd_uri_t root = {
@@ -154,7 +175,7 @@ static const httpd_uri_t css = {
 };
 
 static const httpd_uri_t data = {
-    .uri = "/data/*",
+    .uri = "/stream",
     .method = HTTP_GET,
     .handler = data_get_handler 
 };
@@ -184,7 +205,7 @@ static httpd_handle_t start_webserver(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_open_sockets = 13;
     config.lru_purge_enable = true;
-    config.uri_match_fn = httpd_uri_match_wildcard;
+    //config.uri_match_fn = httpd_uri_match_wildcard;
 
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
@@ -211,8 +232,11 @@ void app_main(void)
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
 
+    QueueHandle_t accel_queue = xQueueCreate(5, sizeof(struct chunk_t));
     // Start the acceleration measurement
-    xTaskCreate(accel_reader_task, "Accel Reader", 4096, NULL, 2, NULL);
+    xTaskCreate(accel_reader_task, "Accel Reader", 4096, accel_queue, 2, NULL);
+    // Start the streaming task
+    xTaskCreate(streaming_connection_task, "Data Stream", 8200, accel_queue, 2, NULL);
 
     // Initialize networking stack
     ESP_ERROR_CHECK(esp_netif_init());
@@ -234,4 +258,5 @@ void app_main(void)
 
     // Start the DNS server that will redirect all queries to the softAP IP
     start_dns_server();
+
 }

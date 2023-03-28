@@ -18,6 +18,7 @@ Unless required by applicable law or agreed to in writing, this software is dist
 #include "driver/i2c.h"
 #include "esp_timer.h"
 #include "byteswap.h"
+#include "accel_read.h"
 
 static const char *TAG = "i2c";
 
@@ -100,87 +101,18 @@ struct xyz{
     int16_t z;
 };
 
-#define ACCEL_LOG_SIZE 400
-static struct xyz accel_log[ACCEL_LOG_SIZE];
-static size_t accel_latest;
-static long t_latest;
-
-#define LAMBDA_COPY(val, stop, fmt) for(;i<stop;++i){written+=snprintf(dest+written,size-written,fmt,val);if((size-written)<min_size){return written;}}
-
-size_t accel_writer(char * dest, size_t size, long t0){
-    const size_t min_size = 20; //Stop writing if not enough bytes are left
-    const char * dfmt = "%d,"; //Integer format
-    size_t written = 0;
-    size_t len;
-
-    // All persistent variables are declared static
-    static size_t i1, i2, i3, i4, i;
-    static int iter = 0;
-    switch(iter){ // Used to maintain state. Fall-through intended.
-        case 0: // Setup
-            len = t_latest - t0;
-            if(len > (ACCEL_LOG_SIZE - 10)){
-                len = ACCEL_LOG_SIZE - 10;
-                t0 = t_latest - len;
-            }
-            i3 = accel_latest - len;
-            if(i3 > ACCEL_LOG_SIZE){
-                i1 = i3 + ACCEL_LOG_SIZE;
-                i3 = 0;
-            }
-            i2 = ACCEL_LOG_SIZE;
-            i4 = accel_latest;
-            i = i1;
-            written = snprintf(dest, size, "{\"t0\":%ld,\n\"x\":[", t0); // Start of JSON array
-            __attribute__ ((fallthrough));
-        case 3:
-            iter = 3;
-            LAMBDA_COPY(accel_log[i].x, i2, dfmt)
-            i = i3;
-            __attribute__ ((fallthrough));
-        case 4:
-            iter = 4;
-            LAMBDA_COPY(accel_log[i].x, i4, dfmt)
-            --written;
-            written += snprintf(dest+written, size-written, "],\n\"y\":["); // Array seperator
-            i = i1;
-            __attribute__ ((fallthrough));
-        case 5:
-            iter = 5;
-            LAMBDA_COPY(accel_log[i].y, i2, dfmt)
-            i = i3;
-            __attribute__ ((fallthrough));
-        case 6:
-            iter = 6;
-            LAMBDA_COPY(accel_log[i].y, i4, dfmt)
-            --written;
-            written += snprintf(dest+written, size-written, "],\n\"z\":["); // Array seperator
-            i = i1;
-            __attribute__ ((fallthrough));
-        case 7:
-            iter = 7;
-            LAMBDA_COPY(accel_log[i].z, i2, dfmt)
-            i = i3;
-            __attribute__ ((fallthrough));
-        case 8:
-            iter = 8;
-            LAMBDA_COPY(accel_log[i].z, i4, dfmt)
-            --written;
-            written += snprintf(dest+written, size-written, "]\n}"); // Array end
-            iter = 9;
-            return written;
-        default:
-            iter = 0;
-            return 0; // Finished writing
-    }
-}
-
 void accel_reader_task(void *pvParameters)
 {
-    uint8_t data[128];
-    struct xyz accel;
-    accel_latest = 0;
-    t_latest = 0;
+    struct chunk_t chunk;
+    uint8_t data[300];
+    int16_t * buf = (int16_t *) data;
+    QueueHandle_t queue = (QueueHandle_t) pvParameters;
+    size_t q_size = uxQueueSpacesAvailable(queue);
+    struct accel_t ** accel = malloc((sizeof(data)+sizeof(void*))* q_size);
+    accel[0] = accel + q_size;
+    for(size_t i = 1; i < q_size; ++i){
+        accel[i] = accel[i-1] + sizeof(data);
+    }
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
 
@@ -203,29 +135,25 @@ void accel_reader_task(void *pvParameters)
 
     ESP_WARN(register_write_byte(0x23,0x08)); // Set only Accelerometer to fill FIFO
     ESP_WARN(register_write_byte(0x6A, 0x40));// Enable FIFO
-    while(1){
-        //ESP_WARN(get_accel(&accel));
+    while(1){for(size_t i = 0; i < q_size; ++i){
         int16_t fifo_size;
         ESP_WARN(register_read(0x72,(uint8_t*)&fifo_size,2));
         fifo_size = __bswap_16(fifo_size);
         ESP_LOGI(TAG, "Fifo size: %d", fifo_size);
         if(fifo_size > sizeof(data))
             fifo_size = sizeof(data);
-        ESP_WARN(register_read(0x74,data,fifo_size));
-        int16_t * buf = (int16_t *)data;
+        ESP_WARN(register_read(0x74,(uint8_t*)buf,fifo_size));
+        chunk.len = 0;
+        chunk.data = accel[i];
         for(;fifo_size>0;fifo_size -=6){
-            accel.x = __bswap_16(*buf++);
-            accel.y = __bswap_16(*buf++);
-            accel.z = __bswap_16(*buf++);
-            //FIXME: Add a mutex or semaphore to prevent simultaneous access
-            ++t_latest;
-            accel_log[accel_latest] = accel;
-            if( ++accel_latest >= ACCEL_LOG_SIZE)
-                accel_latest = 0;
+            chunk.data[chunk.len].x = __bswap_16(*buf++);
+            chunk.data[chunk.len].y = __bswap_16(*buf++);
+            chunk.data[chunk.len].z = __bswap_16(*buf++);
+            ++chunk.len;
         }
-        //ESP_LOGI(TAG, "%d %d %d", accel.x, accel.y, accel.z);
+        xQueueSend(queue, (void*)&chunk, 200 / portTICK_PERIOD_MS);
         vTaskDelay(100 / portTICK_PERIOD_MS);
-    }
+    }}
 
     ESP_WARN(i2c_driver_delete(I2C_MASTER_NUM));
     ESP_LOGI(TAG, "I2C de-initialized successfully");

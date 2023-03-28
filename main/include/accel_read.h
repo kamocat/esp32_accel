@@ -1,2 +1,9 @@
-size_t accel_writer(char * dest, size_t size, long t0);
 void accel_reader_task(void * pvParameters);
+
+struct accel_t {
+    int16_t x,y,z;
+};
+struct chunk_t {
+    size_t len;
+    struct accel_t * data;
+};
