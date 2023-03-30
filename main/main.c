@@ -121,16 +121,56 @@ static esp_err_t myjs_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+struct async_resp_arg {
+    httpd_handle_t hd;
+    int fd;
+};
+
 #define CMAX 10
-httpd_req_t clist[CMAX];
+struct async_resp_arg * clist[CMAX];
 size_t ccount;
 
 static esp_err_t data_get_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    const char * data = "{'axes':['x','y','z'],'data':[]}\n";
-    httpd_resp_send_chunk(req, data, 33);
+    size_t i;
+    for(i=0; i<ccount; ++i){
+        if(0 == clist[i])
+            break;
+    }
+    if(i < CMAX){
+        if(i >= ccount)
+            ccount = i+1;
+        httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+        const char * data = "{'axes':['x','y','z'],'data':[]}\n";
+        struct async_resp_arg *resp_arg = malloc(sizeof(struct async_resp_arg));
+        resp_arg->hd = req->handle;
+        resp_arg->fd = httpd_req_to_sockfd(req);
+        clist[i] = resp_arg;
+        httpd_resp_send_chunk(req, data, 33);
+    } else {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_send(req, "The ESP32 can only handle 10 connections", HTTPD_RESP_USE_STRLEN);
+        ESP_LOGW("stream","Connection refused");
+    }
     return ESP_OK;
+}
+
+void write_chunk_size(char * buf, size_t len){
+    // Assume that len is less than 1500, due to MTU size limitations
+    // Write three digits of hexadecimal. Covers numbers up to 4095
+    len -= 7; // We're using the first five bytes to write the chunk size
+    for(int i = 2; i >= 0; --i){
+        char hex = len & 0xf;
+        len >>= 4;
+        if(hex > 9)
+            hex += 'A'-10;
+        else
+            hex += '0';
+        buf[i] = hex;
+    }
+    // Terminate with CRLF
+    buf[3] = '\r';
+    buf[4] = '\n';
 }
 
 void streaming_connection_task(void *pvParameters)
@@ -139,21 +179,29 @@ void streaming_connection_task(void *pvParameters)
     struct accel_t accel;
     QueueHandle_t queue = (QueueHandle_t) pvParameters;
     char s[1300];
-    const size_t len2 = snprintf(s, sizeof(s), "{'axes':['x','y','z'],'data':");
     ccount = 0;
     while(1){
-        size_t len = len2;
+        size_t len = 5;
+        len += snprintf(s+len, sizeof(s)-len, "{'axes':['x','y','z'],'data':");
         while(xQueueReceive(queue,&accel,100/portTICK_PERIOD_MS)){
             len += snprintf(s+len,sizeof(s)-len,"[%d,%d,%d],",accel.x,accel.y,accel.z);
             if((sizeof(s)-len) < 30){
                 break;
             }
         }
-        ESP_LOGI(name, "JSON size: %d", len);
         s[len-1]='}';
+        s[len++]='\r';
         s[len++]='\n';
+        //ESP_LOGI(name, "JSON size: %d", len);
+        write_chunk_size(s,len);
         for(int i = 0; i < ccount; ++i){
-            httpd_resp_send_chunk(&clist[i], s, len);
+            if(0 == clist[i])
+                continue;
+            if(0xfffffffe == httpd_socket_send(clist[i]->hd,clist[i]->fd, s, len, 0)){
+                ESP_LOGW(name, "Connection dropped");
+                free(clist[i]);
+                clist[i] = 0;
+            }
         }
     }
 }
@@ -234,7 +282,7 @@ void app_main(void)
 
     QueueHandle_t accel_queue = xQueueCreate(500, sizeof(struct accel_t));
     // Start the acceleration measurement
-    xTaskCreate(accel_reader_task, "Accel Reader", 4096, accel_queue, 2, NULL);
+    //xTaskCreate(accel_reader_task, "Accel Reader", 4096, accel_queue, 2, NULL);
     // Start the streaming task
     xTaskCreate(streaming_connection_task, "Data Stream", 8200, accel_queue, 2, NULL);
 
