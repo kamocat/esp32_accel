@@ -23,14 +23,6 @@ Unless required by applicable law or agreed to in writing, this software is dist
 
 static const char *TAG = "i2c";
 
-static void esp_warn_check(esp_err_t err, int line){
-    if( err != ESP_OK ){
-        ESP_LOGW(TAG, "Warning on line %d: %s", line, esp_err_to_name(err));
-    }
-}
-
-#define ESP_WARN(err) esp_warn_check(err, __builtin_LINE()) 
-
 #define I2C_MASTER_SCL_IO           19                        /*!< GPIO number used for I2C master clock */
 #define I2C_MASTER_SDA_IO           21                        /*!< GPIO number used for I2C master data  */
 #define I2C_MASTER_NUM              0                         /*!< I2C master i2c port number, the number of i2c peripheral interfaces available will depend on the chip */
@@ -112,41 +104,42 @@ void accel_reader_task(void *pvParameters)
     ESP_LOGI(TAG, "I2C initialized successfully");
 
     /* Read the MPU6050 WHO_AM_I register, should match the i2c addres */
-    ESP_WARN(register_read(MPU6050_WHO_AM_I_REG_ADDR, data, 1));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(register_read(MPU6050_WHO_AM_I_REG_ADDR, data, 1));
     ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
 
     /* Configure the power control */
     data[0] = 4; // FIFO reset
     data[1] = 3; // Disable sleep. Use PLL from Z-axis gyroscope for more accurate clock
     data[2] = 0;
-    ESP_WARN(register_write(0x6A, data, 3));
+    register_write(0x6A, data, 3);
 
     /* Set the filter and sample rate */
     data[0] = 9; // 100Hz sample rate
     data[1] = 0x25; // 10Hz digital filter
     data[2] = 0; // Disable Gyro self-test, set full-scale to 250 degrees/second
     data[3] = 0; // Disable accel self-test, set full scale to 2G
-    ESP_WARN(register_write(0x19, data, 4));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(register_write(0x19, data, 4));
 
-    ESP_WARN(register_write_byte(0x23,0x08)); // Set only Accelerometer to fill FIFO
-    ESP_WARN(register_write_byte(0x6A, 0x40));// Enable FIFO
+    ESP_ERROR_CHECK_WITHOUT_ABORT(register_write_byte(0x23,0x08)); // Set only Accelerometer to fill FIFO
+    ESP_ERROR_CHECK_WITHOUT_ABORT(register_write_byte(0x6A, 0x40));// Enable FIFO
+
     while(1){
+        vTaskDelay(100 / portTICK_PERIOD_MS);
         int16_t fifo_size;
-        ESP_WARN(register_read(0x72,(uint8_t*)&fifo_size,2));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(register_read(0x72,(uint8_t*)&fifo_size,2));
         fifo_size = __bswap_16(fifo_size);
-        ESP_LOGI(TAG, "Fifo size: %d", fifo_size);
+        //ESP_LOGI(TAG, "Fifo size: %d", fifo_size);
         if(fifo_size > sizeof(data))
             fifo_size = sizeof(data);
-        ESP_WARN(register_read(0x74,(uint8_t*)buf,fifo_size));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(register_read(0x74,(uint8_t*)buf,fifo_size));
         for(;fifo_size>0;fifo_size -=6){
             accel.x = __bswap_16(*buf++);
             accel.y = __bswap_16(*buf++);
             accel.z = __bswap_16(*buf++);
             xQueueSend(queue,&accel, 1);
         }
-        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 
-    ESP_WARN(i2c_driver_delete(I2C_MASTER_NUM));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(i2c_driver_delete(I2C_MASTER_NUM));
     ESP_LOGI(TAG, "I2C de-initialized successfully");
 }

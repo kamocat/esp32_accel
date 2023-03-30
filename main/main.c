@@ -124,17 +124,18 @@ static esp_err_t myjs_get_handler(httpd_req_t *req)
 struct async_resp_arg {
     httpd_handle_t hd;
     int fd;
+    bool open;
 };
 
 #define CMAX 10
-struct async_resp_arg * clist[CMAX];
+struct async_resp_arg clist[CMAX];
 size_t ccount;
 
 static esp_err_t data_get_handler(httpd_req_t *req)
 {
     size_t i;
     for(i=0; i<ccount; ++i){
-        if(0 == clist[i])
+        if(!clist[i].open)
             break;
     }
     if(i < CMAX){
@@ -142,10 +143,9 @@ static esp_err_t data_get_handler(httpd_req_t *req)
             ccount = i+1;
         httpd_resp_set_type(req, HTTPD_TYPE_JSON);
         const char * data = "{'axes':['x','y','z'],'data':[]}\n";
-        struct async_resp_arg *resp_arg = malloc(sizeof(struct async_resp_arg));
-        resp_arg->hd = req->handle;
-        resp_arg->fd = httpd_req_to_sockfd(req);
-        clist[i] = resp_arg;
+        clist[i].hd = req->handle;
+        clist[i].fd = httpd_req_to_sockfd(req);
+        clist[i].open = 1;
         httpd_resp_send_chunk(req, data, 33);
     } else {
         httpd_resp_set_status(req, "503 Service Unavailable");
@@ -182,25 +182,23 @@ void streaming_connection_task(void *pvParameters)
     ccount = 0;
     while(1){
         size_t len = 5;
-        len += snprintf(s+len, sizeof(s)-len, "{'axes':['x','y','z'],'data':");
+        len += snprintf(s+len, sizeof(s)-len, "{'axes':['x','y','z'],'data':[ ");
         while(xQueueReceive(queue,&accel,100/portTICK_PERIOD_MS)){
             len += snprintf(s+len,sizeof(s)-len,"[%d,%d,%d],",accel.x,accel.y,accel.z);
             if((sizeof(s)-len) < 30){
                 break;
             }
         }
-        s[len-1]='}';
-        s[len++]='\r';
-        s[len++]='\n';
+        memcpy(s+len-1, "]}\r\n", 4);
+        len += 4;
         //ESP_LOGI(name, "JSON size: %d", len);
         write_chunk_size(s,len);
         for(int i = 0; i < ccount; ++i){
-            if(0 == clist[i])
+            if(!clist[i].open)
                 continue;
-            if(0xfffffffe == httpd_socket_send(clist[i]->hd,clist[i]->fd, s, len, 0)){
+            if(0xfffffffe == httpd_socket_send(clist[i].hd,clist[i].fd, s, len-1, 0)){
                 ESP_LOGW(name, "Connection dropped");
-                free(clist[i]);
-                clist[i] = 0;
+                clist[i].open = 0;
             }
         }
     }
@@ -282,9 +280,9 @@ void app_main(void)
 
     QueueHandle_t accel_queue = xQueueCreate(500, sizeof(struct accel_t));
     // Start the acceleration measurement
-    //xTaskCreate(accel_reader_task, "Accel Reader", 4096, accel_queue, 2, NULL);
+    xTaskCreate(accel_reader_task, "Accel Reader", 4096, accel_queue, 2, NULL);
     // Start the streaming task
-    xTaskCreate(streaming_connection_task, "Data Stream", 8200, accel_queue, 2, NULL);
+    xTaskCreate(streaming_connection_task, "Data Stream", 4096, accel_queue, 2, NULL);
 
     // Initialize networking stack
     ESP_ERROR_CHECK(esp_netif_init());
