@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html><head>
+<style>
+button{
+	width: 40%;
+	padding: 1em;
+}
+input{
+	width:40%;
+}
+label{
+	width:49%;
+}
+#autorange{
+	width:100%;
+}
+#sidebar{
+	float:right;
+	width: 20%;
+}
+</style>
+<link rel="stylesheet" href="/static/uPlot/dist/uPlot.min.css">
+<script src="/static/uPlot/dist/uPlot.iife.js"></script>
+</head>
+<body>
+<div id="sidebar">
+<h2>Stats</h2>
+<p id="stats"></p>
+<h2>History</h2>
+<label for="n_hist">Length to display</label>
+<input type="number" id="n_hist" name="n_hist" min="100" max="10000" step="100" value="500">
+<h2>Logs</h2>
+<button type="button" onclick="get_fragment('logs', '/logs?new=true')">New</button>
+<ul id="logs">
+<li><a href="/latest">Latest</a></li>
+</ul>
+</div>
+<div id="chart1"></div>
+<script src="/static/liveplot.js"></script>
+</body></html>
+

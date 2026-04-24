@@ -8,3 +8,5 @@ endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(captive_portal)
+
+spiffs_create_partition_image(storage static FLASH_IN_PROJECT)
