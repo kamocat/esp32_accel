@@ -9,6 +9,8 @@ let opts = {
 let sample_rate = 1000;
 let data = [[], [], [], []];
 let allData = [[], [], [], []];
+let saveCount = 0;
+let saveCursor = 0;
 
 function setColors(){
 	const styles = [{stroke: "red", width:2},
@@ -83,6 +85,7 @@ async function loop(){
 	setColors()
 	data = [[], [], [], []]
 	allData = [[], [], [], []]
+	saveCursor = 0
 
 	const socket = new WebSocket("/stream")
 	socket.binaryType = 'arraybuffer';
@@ -123,14 +126,24 @@ function appendBinary(data, buffer) {
 }
 
 function save_recording() {
+	const end = allData[0].length;
+	if (end <= saveCursor) return;
+	const slice = allData.map(col => col.slice(saveCursor, end));
+	const duration = slice[0][slice[0].length - 1] - slice[0][0];
+	const durStr = duration >= 60
+		? Math.round(duration / 60) + 'm'
+		: Math.round(duration) + 's';
+	saveCount++;
+	const filename = 'acceleration_log_' + saveCount + '.csv';
 	const labels = opts.series.map(s => s.label);
 	const rows = [labels.join(',')];
-	for (let i = 0; i < allData[0].length; i++) {
-		rows.push(allData.map(col => col[i]).join(','));
+	for (let i = 0; i < slice[0].length; i++) {
+		rows.push(slice.map(col => col[i]).join(','));
 	}
 	const csv = rows.join('\r\n');
 	const file = new Blob([csv], {type: 'text/csv'});
 	const tag = document.createElement('li');
-	tag.innerHTML = '<a href="' + URL.createObjectURL(file) + '" download="acceleration_log.csv">Download</a>';
+	tag.innerHTML = '<a href="' + URL.createObjectURL(file) + '" download="' + filename + '">' + filename + ' (' + durStr + ')</a>';
 	document.getElementById('dl').appendChild(tag);
+	saveCursor = end;
 }
