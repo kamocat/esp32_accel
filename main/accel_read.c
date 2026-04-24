@@ -112,7 +112,7 @@ static esp_err_t get_accel(struct xyz * data){
     return err;
 }
 
-#define ACCEL_LOG_SIZE 400
+#define ACCEL_LOG_SIZE 500
 static struct xyz accel_log[ACCEL_LOG_SIZE];
 static size_t accel_latest;
 
@@ -210,7 +210,7 @@ void accel_reader_task(void *pvParameters)
 
     /* Set the filter and sample rate */
     data[0] = 9; // 100Hz sample rate
-    data[1] = 0x25; // 10Hz digital filter
+    data[1] = 0x23; // 44Hz digital filter
     data[2] = 0; // Disable Gyro self-test, set full-scale to 250 degrees/second
     data[3] = 0; // Disable accel self-test, set full scale to 2G
     ESP_WARN(register_write(0x19, data, 4));
