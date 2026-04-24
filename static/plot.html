@@ -20,7 +20,7 @@ label{
 }
 </style>
 <link rel="stylesheet" href="/static/uPlot/dist/uPlot.min.css">
-<script src="/static/uPlot/dist/uPlot.iife.js"></script>
+<script src="/static/uPlot/dist/uPlot.iife.min.js"></script>
 </head>
 <body>
 <div id="sidebar">
@@ -28,12 +28,10 @@ label{
 <p id="stats"></p>
 <h2>History</h2>
 <label for="n_hist">Length to display</label>
-<input type="number" id="n_hist" name="n_hist" min="100" max="10000" step="100" value="500">
-<h2>Logs</h2>
-<button type="button" onclick="get_fragment('logs', '/logs?new=true')">New</button>
-<ul id="logs">
-<li><a href="/latest">Latest</a></li>
-</ul>
+<input type="number" id="n_hist" name="n_hist" min="500" max="50000" step="500" value="2000">
+<h2>Export</h2>
+<button onclick="save_recording()">Save CSV</button>
+<ul id="dl"></ul>
 </div>
 <div id="chart1"></div>
 <script src="/static/liveplot.js"></script>

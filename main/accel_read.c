@@ -14,6 +14,7 @@
 Unless required by applicable law or agreed to in writing, this software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
    CONDITIONS OF ANY KIND, either express or implied.  */
 #include <stdio.h>
+#include <string.h>
 #include "esp_log.h"
 #include "driver/i2c.h"
 #include "esp_timer.h"
@@ -94,111 +95,66 @@ static esp_err_t i2c_master_init(void)
     return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
 }
 
-struct xyz{
+struct xyz {
     int16_t x;
     int16_t y;
     int16_t z;
     float t;
 };
 
-static esp_err_t get_accel(struct xyz * data){
-    int16_t buf[3];
-    esp_err_t err = register_read(0x3B, (uint8_t*)buf, 6);
-    //sESP_LOG_BUFFER_HEX(TAG, buf, 6);
-    data->x = __bswap_16(buf[0]);
-    data->y = __bswap_16(buf[1]);
-    data->z = __bswap_16(buf[2]);
-    data->t = esp_timer_get_time() * 0.000001;
-    return err;
+#define ACCEL_LOG_SIZE 2000
+static struct xyz accel_log[ACCEL_LOG_SIZE];
+static volatile size_t accel_latest;
+
+size_t accel_get_latest_idx(void)
+{
+    return accel_latest;
 }
 
-#define ACCEL_LOG_SIZE 500
-static struct xyz accel_log[ACCEL_LOG_SIZE];
-static size_t accel_latest;
-
-#define LAMBDA_COPY(val, stop, fmt) for(;i<stop;++i){written+=snprintf(dest+written,size-written,fmt,val);if((size-written)<min_size){return written;}}
-
-size_t accel_writer(char * dest, size_t size){
-    const size_t min_size = 20; //Stop writing if not enough bytes are left
-    const char * fmt = "%.3f,"; //Format floats to 3 digits past the decimal
-    const char * dfmt = "%d,"; //Integer format
-    size_t written = 0;
-
-    // All persistent variables are declared static
-    static size_t i1, i2, i3, i4, i;
-    static int iter = 0;
-    switch(iter){ // Used to maintain state. Fall-through intended.
-        case 0: // Setup
-            i1 = accel_latest + 10;
-            i2 = ACCEL_LOG_SIZE;
-            i3 = 0;
-            i4 = accel_latest+1;
-            i = i1;
-            written = snprintf(dest, size, "[["); // Start of JSON array
-            __attribute__ ((fallthrough));
-        case 1:
-            iter = 1;
-            LAMBDA_COPY(accel_log[i].t, i2, fmt)
-            i = i3;
-            __attribute__ ((fallthrough));
-        case 2:
-            iter = 2;
-            LAMBDA_COPY(accel_log[i].t, i4, fmt)
-            --written;
-            written += snprintf(dest+written, size-written, "],["); // Array seperator
-            i = i1;
-            __attribute__ ((fallthrough));
-        case 3:
-            iter = 3;
-            LAMBDA_COPY(accel_log[i].x, i2, dfmt)
-            i = i3;
-            __attribute__ ((fallthrough));
-        case 4:
-            iter = 4;
-            LAMBDA_COPY(accel_log[i].x, i4, dfmt)
-            --written;
-            written += snprintf(dest+written, size-written, "],["); // Array seperator
-            i = i1;
-            __attribute__ ((fallthrough));
-        case 5:
-            iter = 5;
-            LAMBDA_COPY(accel_log[i].y, i2, dfmt)
-            i = i3;
-            __attribute__ ((fallthrough));
-        case 6:
-            iter = 6;
-            LAMBDA_COPY(accel_log[i].y, i4, dfmt)
-            --written;
-            written += snprintf(dest+written, size-written, "],["); // Array seperator
-            i = i1;
-            __attribute__ ((fallthrough));
-        case 7:
-            iter = 7;
-            LAMBDA_COPY(accel_log[i].z, i2, dfmt)
-            i = i3;
-            __attribute__ ((fallthrough));
-        case 8:
-            iter = 8;
-            LAMBDA_COPY(accel_log[i].z, i4, dfmt)
-            --written;
-            written += snprintf(dest+written, size-written, "]]"); // Array end
-            iter = 9;
-            return written;
-        default:
-            iter = 0;
-            return 0; // Finished writing
+/* Binary packet format (all little-endian, matches ESP32 native byte order):
+ *   [0..3]  float32  t0  — timestamp of first sample in seconds
+ *   [4..5]  uint16   n   — number of samples
+ *   [6+i*6 .. 6+i*6+5]  int16 x, int16 y, int16 z  for sample i
+ */
+size_t accel_copy_new_binary(size_t last_idx, uint8_t *buf, size_t buf_size)
+{
+    size_t latest = accel_latest;
+    size_t n = (latest - last_idx + ACCEL_LOG_SIZE) % ACCEL_LOG_SIZE;
+    if (n == 0 || buf_size < 12) {
+        return 0;
     }
+    size_t max_samples = (buf_size - 6) / 6;
+    if (n > max_samples) {
+        n = max_samples;
+    }
+    size_t first_idx = (latest - n + 1 + ACCEL_LOG_SIZE) % ACCEL_LOG_SIZE;
+    float t0 = accel_log[first_idx].t;
+    memcpy(buf, &t0, 4);
+    uint16_t n16 = (uint16_t)n;
+    memcpy(buf + 4, &n16, 2);
+    size_t pos = 6;
+    for (size_t i = 0; i < n; i++) {
+        size_t idx = (first_idx + i) % ACCEL_LOG_SIZE;
+        int16_t x = accel_log[idx].x;
+        int16_t y = accel_log[idx].y;
+        int16_t z = accel_log[idx].z;
+        memcpy(buf + pos,     &x, 2);
+        memcpy(buf + pos + 2, &y, 2);
+        memcpy(buf + pos + 4, &z, 2);
+        pos += 6;
+    }
+    return pos;
 }
 
 void accel_reader_task(void *pvParameters)
 {
-    uint8_t data[128];
+    uint8_t data[1024];
     struct xyz accel;
     accel_latest = 0;
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
 
-    /* Read the MPU6050 WHO_AM_I register, should match the i2c addres */
+    /* Read the MPU6050 WHO_AM_I register, should match the i2c address */
     ESP_WARN(register_read(MPU6050_WHO_AM_I_REG_ADDR, data, 1));
     ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
 
@@ -209,36 +165,39 @@ void accel_reader_task(void *pvParameters)
     ESP_WARN(register_write(0x6A, data, 3));
 
     /* Set the filter and sample rate */
-    data[0] = 9; // 100Hz sample rate
-    data[1] = 0x23; // 44Hz digital filter
-    data[2] = 0; // Disable Gyro self-test, set full-scale to 250 degrees/second
-    data[3] = 0; // Disable accel self-test, set full scale to 2G
+    data[0] = 15;    // 500 Hz sample rate (SMPRT_DIV = 15)
+    data[1] = 0x20; // 260 Hz digital filter
+    data[2] = 0;    // Gyro full-scale 250 deg/s
+    data[3] = 0;    // Accel full-scale ±2G
     ESP_WARN(register_write(0x19, data, 4));
 
-    ESP_WARN(register_write_byte(0x23,0x08)); // Set only Accelerometer to fill FIFO
-    ESP_WARN(register_write_byte(0x6A, 0x40));// Enable FIFO
-    accel.t = 0;
-    while(1){
-        //ESP_WARN(get_accel(&accel));
+    ESP_WARN(register_write_byte(0x23, 0x08)); // Set only Accelerometer to fill FIFO
+    ESP_WARN(register_write_byte(0x6A, 0x40)); // Enable FIFO
+    while (1) {
         int16_t fifo_size;
-        ESP_WARN(register_read(0x72,(uint8_t*)&fifo_size,2));
+        ESP_WARN(register_read(0x72, (uint8_t *)&fifo_size, 2));
         fifo_size = __bswap_16(fifo_size);
-        ESP_LOGI(TAG, "Fifo size: %d", fifo_size);
-        if(fifo_size > sizeof(data))
-            fifo_size = sizeof(data);
-        ESP_WARN(register_read(0x74,data,fifo_size));
-        int16_t * buf = (int16_t *)data;
-        for(;fifo_size>0;fifo_size -=6){
-            accel.x = __bswap_16(*buf++);
-            accel.y = __bswap_16(*buf++);
-            accel.z = __bswap_16(*buf++);
-            accel.t+= 0.01;
-            if( ++accel_latest >= ACCEL_LOG_SIZE)
-                accel_latest = 0;
-            accel_log[accel_latest] = accel;
+        if (fifo_size > (int16_t)sizeof(data)) {
+            fifo_size = (int16_t)sizeof(data);
         }
-        //ESP_LOGI(TAG, "%d %d %d", accel.x, accel.y, accel.z);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        if (fifo_size >= 6) {
+            uint64_t now_us = esp_timer_get_time();
+            ESP_WARN(register_read(0x74, data, fifo_size));
+            int n_new = fifo_size / 6;
+            int16_t *buf = (int16_t *)data;
+            for (int j = 0; j < n_new; j++) {
+                accel.x = __bswap_16(*buf++);
+                accel.y = __bswap_16(*buf++);
+                accel.z = __bswap_16(*buf++);
+                /* Back-extrapolate: sample j arrived (n_new-1-j) ms before now */
+                accel.t = (float)(now_us - (uint64_t)(n_new - 1 - j) * 1000) * 1e-6f;
+                if (++accel_latest >= ACCEL_LOG_SIZE) {
+                    accel_latest = 0;
+                }
+                accel_log[accel_latest] = accel;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     ESP_WARN(i2c_driver_delete(I2C_MASTER_NUM));

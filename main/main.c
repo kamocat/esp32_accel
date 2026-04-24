@@ -13,7 +13,6 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
 
 #include "nvs_flash.h"
 #include "esp_wifi.h"
@@ -31,9 +30,6 @@
 
 static const char *TAG = "example";
 static httpd_handle_t s_server;
-static SemaphoreHandle_t s_accel_json_lock;
-
-#define JSON_PAYLOAD_MAX (32 * 1024)
 
 static bool ends_with(const char *str, const char *suffix)
 {
@@ -86,40 +82,6 @@ static esp_err_t send_gzip_file(httpd_req_t *req, const char *file_path, const c
 
     fclose(file);
     return httpd_resp_send_chunk(req, NULL, 0);
-}
-
-static size_t build_accel_json(char *dest, size_t size)
-{
-    size_t total = 0;
-    size_t chunk_len;
-
-    if (xSemaphoreTake(s_accel_json_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
-        return 0;
-    }
-
-    while (total < size) {
-        chunk_len = accel_writer(dest + total, size - total);
-        if (chunk_len == 0) {
-            break;
-        }
-        total += chunk_len;
-    }
-
-    xSemaphoreGive(s_accel_json_lock);
-    return total;
-}
-
-static esp_err_t send_accel_json(httpd_req_t *req)
-{
-    static char payload[JSON_PAYLOAD_MAX];
-    size_t payload_len = build_accel_json(payload, sizeof(payload));
-    if (payload_len == 0) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No data available");
-        return ESP_FAIL;
-    }
-
-    httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    return httpd_resp_send(req, payload, payload_len);
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -202,30 +164,14 @@ static esp_err_t static_get_handler(httpd_req_t *req)
     return send_gzip_file(req, file_path, content_type_for_uri(uri));
 }
 
-static esp_err_t data_get_handler(httpd_req_t *req)
-{
-    return send_accel_json(req);
-}
-
 static esp_err_t header_get_handler(httpd_req_t *req)
 {
     static const char header_json[] =
         "{\"scales\":{\"x\":{\"time\":false}},"
-        "\"series\":[{\"label\":\"t\"},{\"label\":\"x\"},{\"label\":\"y\"},{\"label\":\"z\"}]}";
+        "\"series\":[{\"label\":\"t\"},{\"label\":\"x\"},{\"label\":\"y\"},{\"label\":\"z\"}],"
+        "\"sample_rate\":1000}";
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
     return httpd_resp_send(req, header_json, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t logs_get_handler(httpd_req_t *req)
-{
-    static const char logs_html[] = "<li><a href=\"/latest\">Latest</a></li>";
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, logs_html, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t latest_get_handler(httpd_req_t *req)
-{
-    return send_accel_json(req);
 }
 
 static esp_err_t stream_ws_handler(httpd_req_t *req)
@@ -265,7 +211,8 @@ static esp_err_t stream_ws_handler(httpd_req_t *req)
 
 static void ws_stream_task(void *arg)
 {
-    static char payload[JSON_PAYLOAD_MAX];
+    static uint8_t payload[1024];
+    size_t last_sent_idx = accel_get_latest_idx();
 
     while (1) {
         if (s_server != NULL) {
@@ -273,16 +220,17 @@ static void ws_stream_task(void *arg)
             size_t client_count = CONFIG_LWIP_MAX_SOCKETS;
 
             if (httpd_get_client_list(s_server, &client_count, client_fds) == ESP_OK && client_count > 0) {
-                size_t payload_len = build_accel_json(payload, sizeof(payload));
+                size_t payload_len = accel_copy_new_binary(last_sent_idx, payload, sizeof(payload));
                 if (payload_len > 0) {
+                    size_t n_sent = (payload_len - 6) / 6;
+                    last_sent_idx = (last_sent_idx + n_sent) % 2000;
                     httpd_ws_frame_t ws_pkt = {
                         .final = true,
                         .fragmented = false,
-                        .type = HTTPD_WS_TYPE_TEXT,
-                        .payload = (uint8_t *)payload,
+                        .type = HTTPD_WS_TYPE_BINARY,
+                        .payload = payload,
                         .len = payload_len,
                     };
-
                     for (size_t i = 0; i < client_count; i++) {
                         if (httpd_ws_get_fd_info(s_server, client_fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
                             httpd_ws_send_frame_async(s_server, client_fds[i], &ws_pkt);
@@ -292,7 +240,7 @@ static void ws_stream_task(void *arg)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(250));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -338,30 +286,12 @@ static const httpd_uri_t header = {
     .handler = header_get_handler
 };
 
-static const httpd_uri_t logs = {
-    .uri = "/logs",
-    .method = HTTP_GET,
-    .handler = logs_get_handler
-};
-
-static const httpd_uri_t latest = {
-    .uri = "/latest",
-    .method = HTTP_GET,
-    .handler = latest_get_handler
-};
-
 static const httpd_uri_t stream = {
     .uri = "/stream",
     .method = HTTP_GET,
     .handler = stream_ws_handler,
     .is_websocket = true,
     .handle_ws_control_frames = true
-};
-
-static const httpd_uri_t data = {
-    .uri = "/data",
-    .method = HTTP_GET,
-    .handler = data_get_handler 
 };
 
 // HTTP Error (404) Handler - Redirects all requests to the root page
@@ -391,10 +321,7 @@ static httpd_handle_t start_webserver(void)
     if (httpd_start(&server, &config) == ESP_OK) {
         // Set URI handlers
         ESP_LOGI(TAG, "Registering URI handlers");
-        httpd_register_uri_handler(server, &data);
         httpd_register_uri_handler(server, &header);
-        httpd_register_uri_handler(server, &logs);
-        httpd_register_uri_handler(server, &latest);
         httpd_register_uri_handler(server, &stream);
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &static_files);
@@ -416,11 +343,6 @@ void app_main(void)
 
     // Start the acceleration measurement
     xTaskCreate(accel_reader_task, "Accel Reader", 4096, NULL, 2, NULL);
-    s_accel_json_lock = xSemaphoreCreateMutex();
-    if (s_accel_json_lock == NULL) {
-        ESP_LOGE(TAG, "Failed to create accel JSON mutex");
-        return;
-    }
 
     // Initialize networking stack
     ESP_ERROR_CHECK(esp_netif_init());

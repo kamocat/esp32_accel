@@ -6,6 +6,9 @@ let opts = {
 	height: window.innerHeight*0.8,
 }
 
+let sample_rate = 1000;
+let data = [[], [], [], []];
+
 function setColors(){
 	const styles = [{stroke: "red", width:2},
 			{stroke:"blue", width:4},
@@ -74,15 +77,17 @@ async function loop(){
 		.then(header => {
 			opts.scales = header.scales
 			opts.series = header.series
+			if (header.sample_rate) sample_rate = header.sample_rate;
 		})
 	setColors()
-	let data = [[]]
-	
+	data = [[], [], [], []]
+
 	const socket = new WebSocket("/stream")
+	socket.binaryType = 'arraybuffer';
 	let plot = new uPlot(opts, data, document.getElementById("chart1"))
 	let wt = false
 	socket.addEventListener("message", (evt) => {
-		data = tail(data, evt.data)
+		data = appendBinary(data, evt.data)
 		printStats(data)
 		plot.setData(data)
 	})
@@ -90,36 +95,38 @@ async function loop(){
 }
 loop();
 
-function tail(data, evt){
-	let hist_len = document.getElementById("n_hist").value - 0
-	let nd = JSON.parse(evt)
-	if (data.length > 1){
-		for (i = 0; i < data.length; i++){
-			data[i] = data[i].concat(nd[i])
-			j = Math.max(0, data[i].length-hist_len)
-			data[i] = data[i].slice(j)
+function appendBinary(data, buffer) {
+	let view = new DataView(buffer);
+	if (view.byteLength < 6) return data;
+	let t0 = view.getFloat32(0, true);
+	let n = view.getUint16(4, true);
+	if (view.byteLength < 6 + n * 6) return data;
+	let hist_len = document.getElementById("n_hist").value - 0;
+	let dt = 1.0 / sample_rate;
+	for (let i = 0; i < n; i++) {
+		data[0].push(t0 + i * dt);
+		data[1].push(view.getInt16(6 + i * 6,     true));
+		data[2].push(view.getInt16(6 + i * 6 + 2, true));
+		data[3].push(view.getInt16(6 + i * 6 + 4, true));
+	}
+	let excess = data[0].length - hist_len;
+	if (excess > 0) {
+		for (let k = 0; k < data.length; k++) {
+			data[k] = data[k].slice(excess);
 		}
-	} else {
-		data = nd
 	}
 	return data;
 }
 
-function pretty(matrix) {
-	// Seperates the lines with newline instead of brackets
-	return matrix.map(row => row+'\r\n');
+function save_recording() {
+	const labels = opts.series.map(s => s.label);
+	const rows = [labels.join(',')];
+	for (let i = 0; i < data[0].length; i++) {
+		rows.push(data.map(col => col[i]).join(','));
+	}
+	const csv = rows.join('\r\n');
+	const file = new Blob([csv], {type: 'text/csv'});
+	const tag = document.createElement('li');
+	tag.innerHTML = '<a href="' + URL.createObjectURL(file) + '" download="acceleration_log.csv">Download</a>';
+	document.getElementById('dl').appendChild(tag);
 }
-
-function save_recording(data) {
-	file = new Blob(pretty(data), {type:"octet/stream"});
-	tag = document.createElement("li");
-	tag.innerHTML = '<a href="'+URL.createObjectURL(file)+'" download="acceleration_log.csv">Download</a>';
-	document.getElementById("dl").appendChild(tag);
-}
-
-async function get_fragment(id, url) {
-	p = document.getElementById(id)
-	await fetch(url).then(response => response.text()).then(html => p.innerHTML=html)
-}
-
-get_fragment('logs', '/logs')
