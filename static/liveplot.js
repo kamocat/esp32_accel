@@ -8,6 +8,7 @@ let opts = {
 
 let sample_rate = 1000;
 let data = [[], [], [], []];
+let allData = [[], [], [], []];
 
 function setColors(){
 	const styles = [{stroke: "red", width:2},
@@ -81,6 +82,7 @@ async function loop(){
 		})
 	setColors()
 	data = [[], [], [], []]
+	allData = [[], [], [], []]
 
 	const socket = new WebSocket("/stream")
 	socket.binaryType = 'arraybuffer';
@@ -104,10 +106,12 @@ function appendBinary(data, buffer) {
 	let hist_len = document.getElementById("n_hist").value - 0;
 	let dt = 1.0 / sample_rate;
 	for (let i = 0; i < n; i++) {
-		data[0].push(t0 + i * dt);
-		data[1].push(view.getInt16(6 + i * 6,     true));
-		data[2].push(view.getInt16(6 + i * 6 + 2, true));
-		data[3].push(view.getInt16(6 + i * 6 + 4, true));
+		const t = t0 + i * dt;
+		const x = view.getInt16(6 + i * 6,     true);
+		const y = view.getInt16(6 + i * 6 + 2, true);
+		const z = view.getInt16(6 + i * 6 + 4, true);
+		data[0].push(t); data[1].push(x); data[2].push(y); data[3].push(z);
+		allData[0].push(t); allData[1].push(x); allData[2].push(y); allData[3].push(z);
 	}
 	let excess = data[0].length - hist_len;
 	if (excess > 0) {
@@ -121,8 +125,8 @@ function appendBinary(data, buffer) {
 function save_recording() {
 	const labels = opts.series.map(s => s.label);
 	const rows = [labels.join(',')];
-	for (let i = 0; i < data[0].length; i++) {
-		rows.push(data.map(col => col[i]).join(','));
+	for (let i = 0; i < allData[0].length; i++) {
+		rows.push(allData.map(col => col[i]).join(','));
 	}
 	const csv = rows.join('\r\n');
 	const file = new Blob([csv], {type: 'text/csv'});

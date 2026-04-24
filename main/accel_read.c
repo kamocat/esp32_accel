@@ -165,8 +165,8 @@ void accel_reader_task(void *pvParameters)
     ESP_WARN(register_write(0x6A, data, 3));
 
     /* Set the filter and sample rate */
-    data[0] = 15;    // 500 Hz sample rate (SMPRT_DIV = 15)
-    data[1] = 0x20; // 260 Hz digital filter
+    data[0] = 3;    // 250 Hz sample rate
+    data[1] = 0x21; // 100 Hz digital filter
     data[2] = 0;    // Gyro full-scale 250 deg/s
     data[3] = 0;    // Accel full-scale ±2G
     ESP_WARN(register_write(0x19, data, 4));
