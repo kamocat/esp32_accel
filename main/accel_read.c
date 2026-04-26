@@ -149,6 +149,7 @@ size_t accel_copy_new_binary(size_t last_idx, uint8_t *buf, size_t buf_size)
 void accel_reader_task(void *pvParameters)
 {
     uint8_t data[1024];
+    uint64_t sample_period_us = 1000000ULL / 1000;  // 1000 Hz sample rate
     struct xyz accel;
     accel_latest = 0;
     ESP_ERROR_CHECK(i2c_master_init());
@@ -165,7 +166,7 @@ void accel_reader_task(void *pvParameters)
     ESP_WARN(register_write(0x6A, data, 3));
 
     /* Set the filter and sample rate */
-    data[0] = 3;    // 250 Hz sample rate
+    data[0] = 0;    // 1000 Hz sample rate
     data[1] = 0x21; // 100 Hz digital filter
     data[2] = 0;    // Gyro full-scale 250 deg/s
     data[3] = 0;    // Accel full-scale ±2G
@@ -174,6 +175,19 @@ void accel_reader_task(void *pvParameters)
     ESP_WARN(register_write_byte(0x23, 0x08)); // Set only Accelerometer to fill FIFO
     ESP_WARN(register_write_byte(0x6A, 0x40)); // Enable FIFO
     while (1) {
+        /* Check for FIFO overflow (INT_STATUS reg 0x3A, bit 4).
+         * On overflow the FIFO is disabled and reads return 0x00, so
+         * reset and re-enable it before reading any samples. */
+        uint8_t int_status;
+        ESP_WARN(register_read(0x3A, &int_status, 1));
+        if (int_status & 0x10) {
+            ESP_LOGW(TAG, "FIFO overflow — resetting FIFO");
+            ESP_WARN(register_write_byte(0x6A, 0x04)); // FIFO reset
+            ESP_WARN(register_write_byte(0x6A, 0x40)); // re-enable FIFO
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         int16_t fifo_size;
         ESP_WARN(register_read(0x72, (uint8_t *)&fifo_size, 2));
         fifo_size = __bswap_16(fifo_size);
@@ -190,7 +204,7 @@ void accel_reader_task(void *pvParameters)
                 accel.y = __bswap_16(*buf++);
                 accel.z = __bswap_16(*buf++);
                 /* Back-extrapolate: sample j arrived (n_new-1-j) ms before now */
-                accel.t = (float)(now_us - (uint64_t)(n_new - 1 - j) * 1000) * 1e-6f;
+                accel.t = (float)(now_us - (uint64_t)(n_new - 1 - j) * sample_period_us) * 1e-6f;
                 if (++accel_latest >= ACCEL_LOG_SIZE) {
                     accel_latest = 0;
                 }
