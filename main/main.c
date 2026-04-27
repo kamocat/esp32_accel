@@ -9,6 +9,7 @@
 #include <sys/param.h>
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -23,6 +24,7 @@
 #include "esp_spiffs.h"
 #include "dns_server.h"
 #include "accel_read.h"
+#include "cJSON.h"
 
 #define EXAMPLE_ESP_WIFI_SSID CONFIG_ESP_WIFI_SSID
 #define EXAMPLE_ESP_WIFI_PASS CONFIG_ESP_WIFI_PASSWORD
@@ -166,12 +168,59 @@ static esp_err_t static_get_handler(httpd_req_t *req)
 
 static esp_err_t header_get_handler(httpd_req_t *req)
 {
-    static const char header_json[] =
+    char buf[256];
+    snprintf(buf, sizeof(buf),
         "{\"scales\":{\"x\":{\"time\":false}},"
         "\"series\":[{\"label\":\"t\"},{\"label\":\"x\"},{\"label\":\"y\"},{\"label\":\"z\"}],"
-        "\"sample_rate\":1000}";
+        "\"sample_rate\":%"PRIu32","
+        "\"scale_factor\":%.6f,"
+        "\"dlpf_cfg\":%u,"
+        "\"afs_sel\":%u}",
+        accel_get_sample_rate(),
+        accel_get_scale_factor(),
+        (unsigned)accel_get_dlpf_cfg(),
+        (unsigned)accel_get_afs_sel());
     httpd_resp_set_type(req, HTTPD_TYPE_JSON);
-    return httpd_resp_send(req, header_json, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t settings_post_handler(httpd_req_t *req)
+{
+    char body[128];
+    int ret = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+    body[ret] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *j_dlpf = cJSON_GetObjectItem(root, "dlpf_cfg");
+    cJSON *j_afs  = cJSON_GetObjectItem(root, "afs_sel");
+
+    if (!cJSON_IsNumber(j_dlpf) || !cJSON_IsNumber(j_afs)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing fields");
+        return ESP_FAIL;
+    }
+
+    int dlpf_cfg = (int)cJSON_GetNumberValue(j_dlpf);
+    int afs_sel  = (int)cJSON_GetNumberValue(j_afs);
+    cJSON_Delete(root);
+
+    if (dlpf_cfg < 0 || dlpf_cfg > 6 || afs_sel < 0 || afs_sel > 3) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Value out of range");
+        return ESP_FAIL;
+    }
+
+    accel_set_config((uint8_t)dlpf_cfg, (uint8_t)afs_sel);
+    httpd_resp_set_type(req, HTTPD_TYPE_JSON);
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
 static esp_err_t stream_ws_handler(httpd_req_t *req)
@@ -285,6 +334,11 @@ static const httpd_uri_t header = {
     .method = HTTP_GET,
     .handler = header_get_handler
 };
+static const httpd_uri_t settings = {
+    .uri = "/settings",
+    .method = HTTP_POST,
+    .handler = settings_post_handler
+};
 
 static const httpd_uri_t stream = {
     .uri = "/stream",
@@ -322,6 +376,7 @@ static httpd_handle_t start_webserver(void)
         // Set URI handlers
         ESP_LOGI(TAG, "Registering URI handlers");
         httpd_register_uri_handler(server, &header);
+        httpd_register_uri_handler(server, &settings);
         httpd_register_uri_handler(server, &stream);
         httpd_register_uri_handler(server, &root);
         httpd_register_uri_handler(server, &static_files);

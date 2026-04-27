@@ -7,6 +7,7 @@ let opts = {
 }
 
 let sample_rate = 1000;
+let scale_factor = 1.0;
 let data = [[], [], [], []];
 let allData = [[], [], [], []];
 let saveCount = 0;
@@ -81,6 +82,9 @@ async function loop(){
 			opts.scales = header.scales
 			opts.series = header.series
 			if (header.sample_rate) sample_rate = header.sample_rate;
+			if (header.scale_factor) scale_factor = header.scale_factor;
+			if (header.dlpf_cfg != null) document.getElementById("dlpf_cfg").value = header.dlpf_cfg;
+			if (header.afs_sel  != null) document.getElementById("afs_sel").value  = header.afs_sel;
 		})
 	setColors()
 	data = [[], [], [], []]
@@ -110,9 +114,9 @@ function appendBinary(data, buffer) {
 	let dt = 1.0 / sample_rate;
 	for (let i = 0; i < n; i++) {
 		const t = t0 + i * dt;
-		const x = view.getInt16(6 + i * 6,     true);
-		const y = view.getInt16(6 + i * 6 + 2, true);
-		const z = view.getInt16(6 + i * 6 + 4, true);
+		const x = view.getInt16(6 + i * 6,     true) * scale_factor;
+		const y = view.getInt16(6 + i * 6 + 2, true) * scale_factor;
+		const z = view.getInt16(6 + i * 6 + 4, true) * scale_factor;
 		data[0].push(t); data[1].push(x); data[2].push(y); data[3].push(z);
 		allData[0].push(t); allData[1].push(x); allData[2].push(y); allData[3].push(z);
 	}
@@ -138,7 +142,10 @@ function save_recording() {
 	const labels = opts.series.map(s => s.label);
 	const rows = [labels.join(',')];
 	for (let i = 0; i < slice[0].length; i++) {
-		rows.push(slice.map(col => col[i]).join(','));
+		rows.push(slice.map((col, ci) => {
+			const v = col[i];
+			return ci === 0 ? Math.round(v * 10000) / 10000 : v;
+		}).join(','));
 	}
 	const csv = rows.join('\r\n');
 	const file = new Blob([csv], {type: 'text/csv'});
@@ -146,4 +153,27 @@ function save_recording() {
 	tag.innerHTML = '<a href="' + URL.createObjectURL(file) + '" download="' + filename + '">' + filename + ' (' + durStr + ')</a>';
 	document.getElementById('dl').appendChild(tag);
 	saveCursor = end;
+}
+
+async function applySettings() {
+	const dlpf_cfg = parseInt(document.getElementById("dlpf_cfg").value, 10);
+	const afs_sel  = parseInt(document.getElementById("afs_sel").value,  10);
+	const resp = await fetch("/settings", {
+		method: "POST",
+		headers: {"Content-Type": "application/json"},
+		body: JSON.stringify({dlpf_cfg, afs_sel})
+	});
+	if (!resp.ok) {
+		alert("Settings update failed: " + await resp.text());
+		return;
+	}
+	await fetch("/header")
+		.then(r => r.json())
+		.then(header => {
+			if (header.sample_rate) sample_rate = header.sample_rate;
+			if (header.scale_factor) scale_factor = header.scale_factor;
+		});
+	/* Reset accumulated data so CSV doesn't mix scales */
+	allData = [[], [], [], []];
+	saveCursor = 0;
 }

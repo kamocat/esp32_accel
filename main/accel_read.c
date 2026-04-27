@@ -15,6 +15,8 @@ Unless required by applicable law or agreed to in writing, this software is dist
    CONDITIONS OF ANY KIND, either express or implied.  */
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
+#include <inttypes.h>
 #include "esp_log.h"
 #include "driver/i2c.h"
 #include "esp_timer.h"
@@ -106,6 +108,41 @@ struct xyz {
 static struct xyz accel_log[ACCEL_LOG_SIZE];
 static volatile size_t accel_latest;
 
+/* Runtime config — written by HTTP task, read by accel task */
+static volatile uint8_t g_dlpf_cfg   = 1;  /* 184 Hz BW, 1000 sps */
+static volatile uint8_t g_afs_sel    = 0;  /* ±2 G */
+static volatile bool    g_config_dirty = false;
+
+/* Maps dlpf_cfg → SMPRT_DIV register value.
+ * dlpf_cfg=0: 8 kHz base clock → div=7 gives 1000 sps.
+ * dlpf_cfg=1–6: 1 kHz base clock → dividers for ~4–5× oversampling. */
+static const uint8_t dlpf_to_smprt_div[7] = {7, 0, 1, 4, 9, 19, 39};
+
+void accel_set_config(uint8_t dlpf_cfg, uint8_t afs_sel)
+{
+    if (dlpf_cfg > 6 || afs_sel > 3) return;
+    g_dlpf_cfg    = dlpf_cfg;
+    g_afs_sel     = afs_sel;
+    g_config_dirty = true;
+}
+
+uint32_t accel_get_sample_rate(void)
+{
+    uint8_t div = dlpf_to_smprt_div[g_dlpf_cfg];
+    uint32_t base = (g_dlpf_cfg == 0) ? 8000 : 1000;
+    return base / (div + 1);
+}
+
+float accel_get_scale_factor(void)
+{
+    /* LSB/g for each AFS_SEL: 16384, 8192, 4096, 2048 */
+    float lsb_per_g = (float)(16384 >> g_afs_sel);
+    return 9806.65f / lsb_per_g;
+}
+
+uint8_t accel_get_dlpf_cfg(void) { return g_dlpf_cfg; }
+uint8_t accel_get_afs_sel(void)  { return g_afs_sel; }
+
 size_t accel_get_latest_idx(void)
 {
     return accel_latest;
@@ -149,7 +186,7 @@ size_t accel_copy_new_binary(size_t last_idx, uint8_t *buf, size_t buf_size)
 void accel_reader_task(void *pvParameters)
 {
     uint8_t data[1024];
-    uint64_t sample_period_us = 1000000ULL / 1000;  // 1000 Hz sample rate
+    uint64_t sample_period_us = 1000000ULL / accel_get_sample_rate();
     struct xyz accel;
     accel_latest = 0;
     ESP_ERROR_CHECK(i2c_master_init());
@@ -165,16 +202,30 @@ void accel_reader_task(void *pvParameters)
     data[2] = 0;
     ESP_WARN(register_write(0x6A, data, 3));
 
-    /* Set the filter and sample rate */
-    data[0] = 0;    // 1000 Hz sample rate
-    data[1] = 0x21; // 100 Hz digital filter
-    data[2] = 0;    // Gyro full-scale 250 deg/s
-    data[3] = 0;    // Accel full-scale ±2G
+    /* Set the filter and sample rate from current globals */
+    data[0] = dlpf_to_smprt_div[g_dlpf_cfg];  // SMPRT_DIV
+    data[1] = g_dlpf_cfg;                       // DLPF_CFG
+    data[2] = 0;                                // Gyro full-scale 250 deg/s
+    data[3] = (uint8_t)(g_afs_sel << 3);        // Accel full-scale
     ESP_WARN(register_write(0x19, data, 4));
 
     ESP_WARN(register_write_byte(0x23, 0x08)); // Set only Accelerometer to fill FIFO
     ESP_WARN(register_write_byte(0x6A, 0x40)); // Enable FIFO
     while (1) {
+        /* Apply any pending config change from the HTTP task */
+        if (g_config_dirty) {
+            g_config_dirty = false;
+            data[0] = dlpf_to_smprt_div[g_dlpf_cfg];
+            data[1] = g_dlpf_cfg;
+            data[2] = 0;
+            data[3] = (uint8_t)(g_afs_sel << 3);
+            ESP_WARN(register_write(0x19, data, 4));
+            ESP_WARN(register_write_byte(0x6A, 0x04)); // FIFO reset
+            ESP_WARN(register_write_byte(0x6A, 0x40)); // re-enable FIFO
+            sample_period_us = 1000000ULL / accel_get_sample_rate();
+            ESP_LOGI(TAG, "Config updated: dlpf=%d afs=%d rate=%"PRIu32"Hz",
+                     g_dlpf_cfg, g_afs_sel, accel_get_sample_rate());
+        }
         /* Check for FIFO overflow (INT_STATUS reg 0x3A, bit 4).
          * On overflow the FIFO is disabled and reads return 0x00, so
          * reset and re-enable it before reading any samples. */
