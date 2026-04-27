@@ -109,7 +109,7 @@ static struct xyz accel_log[ACCEL_LOG_SIZE];
 static volatile size_t accel_latest;
 
 /* Runtime config — written by HTTP task, read by accel task */
-static volatile uint8_t g_dlpf_cfg   = 1;  /* 184 Hz BW, 1000 sps */
+static volatile uint8_t g_dlpf_cfg   = 3;  /* 44 Hz BW, 200 sps */
 static volatile uint8_t g_afs_sel    = 0;  /* ±2 G */
 static volatile bool    g_config_dirty = false;
 

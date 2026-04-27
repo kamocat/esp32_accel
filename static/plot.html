@@ -27,7 +27,8 @@ label{
 <h2>Stats</h2>
 <p id="stats"></p>
 <h2>Settings</h2>
-<label for="n_hist">Length to display</label>
+<label for="n_hist">Chart length</label>
+<input type="number" id="n_hist" name="n_hist" min="500" max="50000" step="500" value="2000"><br>
 <label for="dlpf_cfg">Filter / Sample rate</label>
 <select id="dlpf_cfg">
   <option value="0">260 Hz / 1000 sps</option>
@@ -37,16 +38,15 @@ label{
   <option value="4">21 Hz / 100 sps</option>
   <option value="5">10 Hz / 50 sps</option>
   <option value="6">5 Hz / 25 sps</option>
-</select>
+</select><br>
 <label for="afs_sel">Accel scale</label>
 <select id="afs_sel">
   <option value="0" selected>&#177;2 G</option>
   <option value="1">&#177;4 G</option>
   <option value="2">&#177;8 G</option>
   <option value="3">&#177;16 G</option>
-</select>
+</select><br>
 <button onclick="applySettings()">Apply</button>
-<input type="number" id="n_hist" name="n_hist" min="500" max="50000" step="500" value="2000">
 <h2>Export</h2>
 <button onclick="save_recording()">Save CSV</button>
 <ul id="dl"></ul>
